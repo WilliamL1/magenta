@@ -13,10 +13,13 @@
 # limitations under the License.
 """Defines sequence of notes objects for creating datasets."""
 
+import collections
 import copy
 
 # internal imports
+import tensorflow as tf
 
+from magenta.music import chord_symbols_lib
 from magenta.music import constants
 from magenta.pipelines import pipeline
 from magenta.pipelines import statistics
@@ -126,13 +129,19 @@ def extract_subsequence(sequence, start_time, end_time):
 
   Raises:
     QuantizationStatusException: If the sequence has already been quantized.
+    ValueError: If `start_time` is past the end of `sequence`.
   """
   if is_quantized_sequence(sequence):
     raise QuantizationStatusException(
         'Can only extract subsequence from unquantized NoteSequence.')
 
+  if start_time >= sequence.total_time:
+    raise ValueError('Cannot extract subsequence past end of sequence.')
+
   subsequence = music_pb2.NoteSequence()
   subsequence.CopyFrom(sequence)
+
+  subsequence.total_time = 0.0
 
   # Extract notes.
   del subsequence.notes[:]
@@ -143,6 +152,8 @@ def extract_subsequence(sequence, start_time, end_time):
     new_note.CopyFrom(note)
     new_note.start_time -= start_time
     new_note.end_time = min(note.end_time, end_time) - start_time
+    if new_note.end_time > subsequence.total_time:
+      subsequence.total_time = new_note.end_time
 
   # Extract time signatures.
   del subsequence.time_signatures[:]
@@ -225,12 +236,9 @@ def extract_subsequence(sequence, start_time, end_time):
   del subsequence.pitch_bends[:]
   del subsequence.control_changes[:]
 
-  actual_end_time = min(sequence.total_time, end_time)
-  subsequence.total_time = actual_end_time - start_time
-
   subsequence.subsequence_info.start_time_offset = start_time
   subsequence.subsequence_info.end_time_offset = (
-      sequence.total_time - actual_end_time)
+      sequence.total_time - start_time - subsequence.total_time)
 
   return subsequence
 
@@ -313,6 +321,8 @@ def split_note_sequence_on_time_changes(note_sequence, split_notes=True):
   time_signatures_and_tempos = sorted(
       list(note_sequence.time_signatures) + list(note_sequence.tempos),
       key=lambda t: t.time)
+  time_signatures_and_tempos = [t for t in time_signatures_and_tempos
+                                if t.time < note_sequence.total_time]
 
   notes_by_start_time = sorted(list(note_sequence.notes),
                                key=lambda note: note.start_time)
@@ -475,8 +485,8 @@ def quantize_note_sequence(note_sequence, steps_per_quarter):
     for tempo in tempos[1:]:
       if tempo.qpm != qns.tempos[0].qpm:
         raise MultipleTempoException(
-            'NoteSequence has at least one tempo change from %f qpm to %f qpm '
-            'at %.2f seconds.' % (tempos[0].qpm, tempo.qpm, tempo.time))
+            'NoteSequence has at least one tempo change from %.1f qpm to %.1f '
+            'qpm at %.2f seconds.' % (tempos[0].qpm, tempo.qpm, tempo.time))
 
     # Make it clear that there is only 1 tempo and it starts at the beginning.
     qns.tempos[0].time = 0
@@ -521,6 +531,213 @@ def quantize_note_sequence(note_sequence, steps_per_quarter):
           'Got negative chord time: step = %s' % annotation.quantized_step)
 
   return qns
+
+
+# Constants for processing the note/sustain stream.
+# The order here matters because we we want to process 'on' events before we
+# process 'off' events, and we want to process sustain events before note
+# events.
+_SUSTAIN_ON = 0
+_SUSTAIN_OFF = 1
+_NOTE_ON = 2
+_NOTE_OFF = 3
+
+
+def apply_sustain_control_changes(note_sequence, sustain_control_number=64):
+  """Returns a new NoteSequence with sustain pedal control changes applied.
+
+  Extends each note within a sustain to either the beginning of the next note of
+  the same pitch or the end of the sustain period, whichever happens first. This
+  is done on a per instrument basis, so notes are only affected by sustain
+  events for the same instrument.
+
+  Args:
+    note_sequence: The NoteSequence for which to apply sustain. This object will
+        not be modified.
+    sustain_control_number: The MIDI control number for sustain pedal. Control
+        events with this number and value 0-63 will be treated as sustain pedal
+        OFF events, and control events with this number and value 64-127 will be
+        treated as sustain pedal ON events.
+
+  Returns:
+    A copy of `note_sequence` but with note end times extended to account for
+    sustain.
+
+  Raises:
+    QuantizationStatusException: If `note_sequence` is quantized. Sustain can
+        only be applied to unquantized note sequences.
+  """
+  if is_quantized_sequence(note_sequence):
+    raise QuantizationStatusException(
+        'Can only apply sustain to unquantized NoteSequence.')
+
+  sequence = copy.deepcopy(note_sequence)
+
+  # Sort all note on/off and sustain on/off events.
+  events = []
+  events.extend([(note.start_time, _NOTE_ON, note)
+                 for note in sequence.notes])
+  events.extend([(note.end_time, _NOTE_OFF, note)
+                 for note in sequence.notes])
+
+  for cc in sequence.control_changes:
+    if cc.control_number != sustain_control_number:
+      continue
+    value = cc.control_value
+    if value < 0 or value > 127:
+      tf.logging.warn(
+          'Sustain control change has out of range value: %d', value)
+    if value >= 64:
+      events.append((cc.time, _SUSTAIN_ON, cc))
+    elif value < 64:
+      events.append((cc.time, _SUSTAIN_OFF, cc))
+
+  # Sort, using the event type constants to ensure the order events are
+  # processed.
+  events.sort()
+
+  # Lists of active notes, keyed by instrument.
+  active_notes = collections.defaultdict(list)
+  # Whether sustain is active for a given instrument.
+  sus_active = collections.defaultdict(lambda: False)
+
+  # Iterate through all sustain on/off and note on/off events in order.
+  time = 0
+  for time, event_type, event in events:
+    if event_type == _SUSTAIN_ON:
+      sus_active[event.instrument] = True
+    elif event_type == _SUSTAIN_OFF:
+      sus_active[event.instrument] = False
+      # End all notes for the instrument that were being extended.
+      new_active_notes = []
+      for note in active_notes[event.instrument]:
+        if note.end_time < time:
+          # This note was being extended because of sustain.
+          # Update the end time and don't keep it in the list.
+          note.end_time = time
+        else:
+          # This note is actually still active, keep it.
+          new_active_notes.append(note)
+      active_notes[event.instrument] = new_active_notes
+    elif event_type == _NOTE_ON:
+      if sus_active[event.instrument]:
+        # If sustain is on, end all previous notes with the same pitch.
+        new_active_notes = []
+        for note in active_notes[event.instrument]:
+          if note.pitch == event.pitch:
+            note.end_time = time
+            if note.start_time == note.end_time:
+              # This note now has no duration because another note of the same
+              # pitch started at the same time. Only one of these notes should
+              # be preserved, so delete this one.
+              # TODO(fjord): A more correct solution would probably be to
+              # preserve both notes and make the same duration, but that is a
+              # little more complicated to implement. Will keep this solution
+              # until we find that we need the more complex one.
+              sequence.notes.remove(note)
+          else:
+            new_active_notes.append(note)
+        active_notes[event.instrument] = new_active_notes
+      # Add this new note to the list of active notes.
+      active_notes[event.instrument].append(event)
+    elif event_type == _NOTE_OFF:
+      if sus_active[event.instrument]:
+        # Note continues until another note of the same pitch or sustain ends.
+        pass
+      else:
+        # Remove this particular note from the active list.
+        # It may have already been removed if a note of the same pitch was
+        # played when sustain was active.
+        if event in active_notes[event.instrument]:
+          active_notes[event.instrument].remove(event)
+    else:
+      raise AssertionError('Invalid event_type: %s' % event_type)
+
+  # End any notes that were still active due to sustain.
+  for instrument in active_notes.values():
+    for note in instrument:
+      note.end_time = time
+  sequence.total_time = time
+
+  return sequence
+
+
+def infer_chords_for_sequence(
+    sequence, instrument=None, min_notes_per_chord=3):
+  """Infers chords for a NoteSequence and adds them as TextAnnotations.
+
+  For each set of simultaneously-active notes in a NoteSequence (optionally for
+  only one instrument), infers a chord symbol and adds it to NoteSequence as a
+  TextAnnotation. Every change in the set of active notes will result in a new
+  chord symbol unless the new set is smaller than `min_notes_per_chord`.
+
+  If `sequence` is quantized, simultaneity will be determined by quantized steps
+  instead of time.
+
+  Args:
+    sequence: The NoteSequence for which chords will be inferred. Will be
+        modified in place.
+    instrument: The instrument number whose notes will be used for chord
+        inference. If None, all instruments will be used.
+    min_notes_per_chord: The minimum number of simultaneous notes for which to
+        infer a chord.
+
+  Raises:
+    ChordSymbolException: If a chord cannot be determined for a set of
+    simultaneous notes in `sequence`.
+  """
+  notes = [note for note in sequence.notes
+           if not note.is_drum and (instrument is None or
+                                    note.instrument == instrument)]
+  sorted_notes = sorted(notes, key=lambda note: note.start_time)
+
+  # If the sequence is quantized, use quantized steps instead of time.
+  if is_quantized_sequence(sequence):
+    note_start = lambda note: note.quantized_start_step
+    note_end = lambda note: note.quantized_end_step
+  else:
+    note_start = lambda note: note.start_time
+    note_end = lambda note: note.end_time
+
+  # Sort all note start and end events.
+  onsets = [(note_start(note), idx, False)
+            for idx, note in enumerate(sorted_notes)]
+  offsets = [(note_end(note), idx, True)
+             for idx, note in enumerate(sorted_notes)]
+  events = sorted(onsets + offsets)
+
+  current_time = 0
+  current_figure = constants.NO_CHORD
+  active_notes = set()
+
+  for time, idx, is_offset in events:
+    if time > current_time:
+      active_pitches = set(sorted_notes[idx].pitch for idx in active_notes)
+      if len(active_pitches) >= min_notes_per_chord:
+        # Infer a chord symbol for the active pitches.
+        figure = chord_symbols_lib.pitches_to_chord_symbol(active_pitches)
+
+        if figure != current_figure:
+          # Add a text annotation to the sequence.
+          text_annotation = sequence.text_annotations.add()
+          text_annotation.text = figure
+          text_annotation.annotation_type = CHORD_SYMBOL
+          if is_quantized_sequence(sequence):
+            text_annotation.time = (
+                current_time * sequence.quantization_info.steps_per_quarter)
+            text_annotation.quantized_step = current_time
+          else:
+            text_annotation.time = current_time
+
+        current_figure = figure
+
+    current_time = time
+    if is_offset:
+      active_notes.remove(idx)
+    else:
+      active_notes.add(idx)
+
+  assert not active_notes
 
 
 class TranspositionPipeline(pipeline.Pipeline):

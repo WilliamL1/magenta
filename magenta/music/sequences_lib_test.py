@@ -68,12 +68,24 @@ class SequencesLibTest(tf.test.TestCase):
         [(40, 45, 0.0, 1.0), (55, 120, 1.5, 1.51)])
     testing_lib.add_chords_to_sequence(
         expected_subsequence, [('C', 0.0), ('G7', 0.5)])
-    expected_subsequence.total_time = 2.25
+    expected_subsequence.total_time = 1.51
     expected_subsequence.subsequence_info.start_time_offset = 2.5
-    expected_subsequence.subsequence_info.end_time_offset = 5.25
+    expected_subsequence.subsequence_info.end_time_offset = 5.99
 
     subsequence = sequences_lib.extract_subsequence(sequence, 2.5, 4.75)
     self.assertProtoEquals(expected_subsequence, subsequence)
+
+  def testExtractSubsequencePastEnd(self):
+    sequence = copy.copy(self.note_sequence)
+    testing_lib.add_track_to_sequence(
+        sequence, 0,
+        [(12, 100, 0.01, 10.0), (11, 55, 0.22, 0.50), (40, 45, 2.50, 3.50),
+         (55, 120, 4.0, 4.01), (52, 99, 4.75, 5.0)])
+    testing_lib.add_chords_to_sequence(
+        sequence, [('C', 1.5), ('G7', 3.0), ('F', 18.0)])
+
+    with self.assertRaises(ValueError):
+      sequences_lib.extract_subsequence(sequence, 15.0, 16.0)
 
   def testSplitNoteSequenceNoTimeChanges(self):
     sequence = copy.copy(self.note_sequence)
@@ -174,8 +186,9 @@ class SequencesLibTest(tf.test.TestCase):
         [(40, 45, 0.50, 1.50), (55, 120, 2.0, 2.01), (52, 99, 2.75, 3.0)])
     testing_lib.add_chords_to_sequence(
         expected_subsequence_2, [('C', 0.0), ('G7', 1.0), ('F', 2.8)])
-    expected_subsequence_2.total_time = 8.0
+    expected_subsequence_2.total_time = 3.0
     expected_subsequence_2.subsequence_info.start_time_offset = 2.0
+    expected_subsequence_2.subsequence_info.end_time_offset = 5.0
 
     subsequences = sequences_lib.split_note_sequence_on_time_changes(sequence)
     self.assertEquals(2, len(subsequences))
@@ -223,8 +236,8 @@ class SequencesLibTest(tf.test.TestCase):
          (55, 120, 4.0, 4.01)])
     testing_lib.add_chords_to_sequence(
         expected_subsequence_1, [('C', 1.5), ('G7', 3.0)])
-    expected_subsequence_1.total_time = 4.25
-    expected_subsequence_1.subsequence_info.end_time_offset = 0.75
+    expected_subsequence_1.total_time = 4.01
+    expected_subsequence_1.subsequence_info.end_time_offset = 0.99
 
     expected_subsequence_2 = common_testing_lib.parse_test_proto(
         music_pb2.NoteSequence,
@@ -299,9 +312,9 @@ class SequencesLibTest(tf.test.TestCase):
         [(40, 45, 0.50, 1.50), (55, 120, 2.0, 2.01)])
     testing_lib.add_chords_to_sequence(
         expected_subsequence_2, [('C', 0.0), ('G7', 1.0)])
-    expected_subsequence_2.total_time = 2.25
+    expected_subsequence_2.total_time = 2.01
     expected_subsequence_2.subsequence_info.start_time_offset = 2.0
-    expected_subsequence_2.subsequence_info.end_time_offset = 5.75
+    expected_subsequence_2.subsequence_info.end_time_offset = 5.99
 
     expected_subsequence_3 = common_testing_lib.parse_test_proto(
         music_pb2.NoteSequence,
@@ -316,8 +329,9 @@ class SequencesLibTest(tf.test.TestCase):
         [(52, 99, 0.5, 0.75)])
     testing_lib.add_chords_to_sequence(
         expected_subsequence_3, [('G7', 0.0), ('F', 0.55)])
-    expected_subsequence_3.total_time = 5.75
+    expected_subsequence_3.total_time = 0.75
     expected_subsequence_3.subsequence_info.start_time_offset = 4.25
+    expected_subsequence_3.subsequence_info.end_time_offset = 5.0
 
     subsequences = sequences_lib.split_note_sequence_on_time_changes(sequence)
     self.assertEquals(3, len(subsequences))
@@ -542,6 +556,167 @@ class SequencesLibTest(tf.test.TestCase):
         self.note_sequence, self.steps_per_quarter)
     self.assertEqual(12.0,
                      sequences_lib.steps_per_bar_in_quantized_sequence(qns))
+
+  def testApplySustainControlChanges(self):
+    """Verify sustain controls extend notes until the end of the control."""
+    sequence = copy.copy(self.note_sequence)
+    testing_lib.add_control_changes_to_sequence(
+        sequence, 0,
+        [(0.0, 64, 127), (0.75, 64, 0), (2.0, 64, 127), (3.0, 64, 0),
+         (3.75, 64, 127), (4.5, 64, 127), (4.8, 64, 0), (4.9, 64, 127),
+         (6.0, 64, 0)])
+    testing_lib.add_track_to_sequence(
+        sequence, 1,
+        [(12, 100, 0.01, 10.0), (52, 99, 4.75, 5.0)])
+    expected_sequence = copy.copy(sequence)
+    testing_lib.add_track_to_sequence(
+        sequence, 0,
+        [(11, 55, 0.22, 0.50), (40, 45, 2.50, 3.50), (55, 120, 4.0, 4.01)])
+    testing_lib.add_track_to_sequence(
+        expected_sequence, 0,
+        [(11, 55, 0.22, 0.75), (40, 45, 2.50, 3.50), (55, 120, 4.0, 4.8)])
+
+    sus_sequence = sequences_lib.apply_sustain_control_changes(sequence)
+    self.assertProtoEquals(expected_sequence, sus_sequence)
+
+  def testApplySustainControlChangesWithRepeatedNotes(self):
+    """Verify that sustain control handles repeated notes correctly.
+
+    For example, a single pitch played before sustain:
+    x-- x-- x--
+    After sustain:
+    x---x---x--
+
+    Notes should be extended until either the end of the sustain control or the
+    beginning of another note of the same pitch.
+    """
+    sequence = copy.copy(self.note_sequence)
+    testing_lib.add_control_changes_to_sequence(
+        sequence, 0,
+        [(1.0, 64, 127), (4.0, 64, 0)])
+    expected_sequence = copy.copy(sequence)
+    testing_lib.add_track_to_sequence(
+        sequence, 0,
+        [(60, 100, 0.25, 1.50), (60, 100, 1.25, 1.50), (72, 100, 2.00, 3.50),
+         (60, 100, 2.0, 3.00), (60, 100, 3.50, 4.50)])
+    testing_lib.add_track_to_sequence(
+        expected_sequence, 0,
+        [(60, 100, 0.25, 1.25), (60, 100, 1.25, 2.00), (72, 100, 2.00, 4.00),
+         (60, 100, 2.0, 3.50), (60, 100, 3.50, 4.50)])
+
+    sus_sequence = sequences_lib.apply_sustain_control_changes(sequence)
+    self.assertProtoEquals(expected_sequence, sus_sequence)
+
+  def testApplySustainControlChangesWithRepeatedNotesBeforeSustain(self):
+    """Repeated notes before sustain can overlap and should not be modified.
+
+    Once a repeat happens within the sustain, any active notes should end
+    before the next one starts.
+
+    This is kind of an edge case because a note overlapping a note of the same
+    pitch may not make sense, but apply_sustain_control_changes tries not to
+    modify events that happen outside of a sustain.
+    """
+    sequence = copy.copy(self.note_sequence)
+    testing_lib.add_control_changes_to_sequence(
+        sequence, 0,
+        [(1.0, 64, 127), (4.0, 64, 0)])
+    expected_sequence = copy.copy(sequence)
+    testing_lib.add_track_to_sequence(
+        sequence, 0,
+        [(60, 100, 0.25, 1.50), (60, 100, .50, 1.50), (60, 100, 1.25, 2.0)])
+    testing_lib.add_track_to_sequence(
+        expected_sequence, 0,
+        [(60, 100, 0.25, 1.25), (60, 100, 0.50, 1.25), (60, 100, 1.25, 4.00)])
+
+    sus_sequence = sequences_lib.apply_sustain_control_changes(sequence)
+    self.assertProtoEquals(expected_sequence, sus_sequence)
+
+  def testApplySustainControlChangesSimultaneousOnOff(self):
+    """Test sustain on and off events happening at the same time.
+
+    The off event should be processed last, so this should be a no-op.
+    """
+    sequence = copy.copy(self.note_sequence)
+    testing_lib.add_control_changes_to_sequence(
+        sequence, 0, [(1.0, 64, 127), (1.0, 64, 0)])
+    testing_lib.add_track_to_sequence(
+        sequence, 0,
+        [(60, 100, 0.50, 1.50), (60, 100, 2.0, 3.0)])
+
+    sus_sequence = sequences_lib.apply_sustain_control_changes(sequence)
+    self.assertProtoEquals(sequence, sus_sequence)
+
+  def testApplySustainControlChangesExtendNotesToEnd(self):
+    """Test sustain control extending the duration of the final note."""
+    sequence = copy.copy(self.note_sequence)
+    testing_lib.add_control_changes_to_sequence(
+        sequence, 0, [(1.0, 64, 127), (4.0, 64, 0)])
+    expected_sequence = copy.copy(sequence)
+    testing_lib.add_track_to_sequence(
+        sequence, 0,
+        [(60, 100, 0.50, 1.50), (72, 100, 2.0, 3.0)])
+    testing_lib.add_track_to_sequence(
+        expected_sequence, 0,
+        [(60, 100, 0.50, 4.00), (72, 100, 2.0, 4.0)])
+    expected_sequence.total_time = 4.0
+
+    sus_sequence = sequences_lib.apply_sustain_control_changes(sequence)
+    self.assertProtoEquals(expected_sequence, sus_sequence)
+
+  def testApplySustainControlChangesWithIdenticalNotes(self):
+    """In the case of identical notes, one should be dropped.
+
+    This is an edge case because in most cases, the same pitch should not sound
+    twice at the same time on one instrument.
+    """
+    sequence = copy.copy(self.note_sequence)
+    testing_lib.add_control_changes_to_sequence(
+        sequence, 0,
+        [(1.0, 64, 127), (4.0, 64, 0)])
+    expected_sequence = copy.copy(sequence)
+    testing_lib.add_track_to_sequence(
+        sequence, 0,
+        [(60, 100, 2.00, 2.50), (60, 100, 2.00, 2.50)])
+    testing_lib.add_track_to_sequence(
+        expected_sequence, 0,
+        [(60, 100, 2.00, 4.00)])
+
+    sus_sequence = sequences_lib.apply_sustain_control_changes(sequence)
+    self.assertProtoEquals(expected_sequence, sus_sequence)
+
+  def testInferChordsForSequence(self):
+    # Test non-quantized sequence.
+    sequence = copy.copy(self.note_sequence)
+    testing_lib.add_track_to_sequence(
+        sequence, 0,
+        [(60, 100, 1.0, 3.0), (64, 100, 1.0, 2.0), (67, 100, 1.0, 2.0),
+         (65, 100, 2.0, 3.0), (69, 100, 2.0, 3.0),
+         (62, 100, 3.0, 5.0), (65, 100, 3.0, 4.0), (69, 100, 3.0, 4.0)])
+    expected_sequence = copy.copy(sequence)
+    testing_lib.add_chords_to_sequence(
+        expected_sequence, [('C', 1.0), ('F/C', 2.0), ('Dm', 3.0)])
+    sequences_lib.infer_chords_for_sequence(sequence)
+    self.assertProtoEquals(expected_sequence, sequence)
+
+    # Test quantized sequence.
+    sequence = copy.copy(self.note_sequence)
+    sequence.quantization_info.steps_per_quarter = 1
+    testing_lib.add_track_to_sequence(
+        sequence, 0,
+        [(60, 100, 1.1, 3.0), (64, 100, 1.0, 1.9), (67, 100, 1.0, 2.0),
+         (65, 100, 2.0, 3.2), (69, 100, 2.1, 3.1),
+         (62, 100, 2.9, 4.8), (65, 100, 3.0, 4.0), (69, 100, 3.0, 4.1)])
+    testing_lib.add_quantized_steps_to_sequence(
+        sequence,
+        [(1, 3), (1, 2), (1, 2), (2, 3), (2, 3), (3, 5), (3, 4), (3, 4)])
+    expected_sequence = copy.copy(sequence)
+    testing_lib.add_chords_to_sequence(
+        expected_sequence, [('C', 1.0), ('F/C', 2.0), ('Dm', 3.0)])
+    testing_lib.add_quantized_chord_steps_to_sequence(
+        expected_sequence, [1, 2, 3])
+    sequences_lib.infer_chords_for_sequence(sequence)
+    self.assertProtoEquals(expected_sequence, sequence)
 
   def testTranspositionPipeline(self):
     tp = sequences_lib.TranspositionPipeline(range(0, 2))

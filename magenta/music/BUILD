@@ -41,6 +41,8 @@ py_library(
         ":musicxml_reader",
         ":note_sequence_io",
         ":notebook_utils",
+        ":pianoroll_encoder_decoder",
+        ":pianoroll_lib",
         ":sequence_generator",
         ":sequence_generator_bundle",
         ":sequences_lib",
@@ -53,6 +55,7 @@ py_library(
     srcs = ["chord_symbols_lib.py"],
     srcs_version = "PY2AND3",
     deps = [
+        ":constants",
         # tensorflow dep
     ],
 )
@@ -347,6 +350,30 @@ py_test(
 )
 
 py_library(
+    name = "musicnet_io",
+    srcs = ["musicnet_io.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        "//magenta/protobuf:music_py_pb2",
+        # intervaltree dep
+        # numpy dep
+        # tensorflow dep
+    ],
+)
+
+py_test(
+    name = "musicnet_io_test",
+    srcs = ["musicnet_io_test.py"],
+    data = ["//magenta/testdata"],
+    srcs_version = "PY2AND3",
+    deps = [
+        ":musicnet_io",
+        # numpy dep
+        # tensorflow dep
+    ],
+)
+
+py_library(
     name = "musicxml_parser",
     srcs = ["musicxml_parser.py"],
     srcs_version = "PY2AND3",
@@ -370,6 +397,7 @@ py_test(
     name = "musicxml_parser_test",
     srcs = ["musicxml_parser_test.py"],
     data = [
+        "testdata/alternating_meter.xml",
         "testdata/atonal_transposition_change.xml",
         "testdata/chord_symbols.xml",
         "testdata/clarinet_scale.xml",
@@ -377,11 +405,12 @@ py_test(
         "testdata/flute_scale.mxl",
         "testdata/flute_scale.xml",
         "testdata/flute_scale_with_png.mxl",
+        "testdata/mid_measure_time_signature.xml",
         "testdata/rhythm_durations.xml",
         "testdata/st_anne.xml",
+        "testdata/unicode_filename.mxl",
         "testdata/unmetered_example.xml",
-        "testdata/alternating_meter.xml",
-        "testdata/mid_measure_time_signature.xml"
+        "testdata/unpitched.xml",
     ],
     srcs_version = "PY2AND3",
     deps = [
@@ -420,6 +449,52 @@ py_library(
     deps = [
         ":midi_synth",
         # IPython dep
+        # bokeh dep
+        # pandas dep
+    ],
+)
+
+py_library(
+    name = "pianoroll_encoder_decoder",
+    srcs = ["pianoroll_encoder_decoder.py"],
+    deps = [
+        ":constants",
+        ":encoder_decoder",
+    ],
+)
+
+py_test(
+    name = "pianoroll_encoder_decoder_test",
+    srcs = ["pianoroll_encoder_decoder_test.py"],
+    deps = [
+        ":pianoroll_encoder_decoder",
+        # tensorflow dep
+    ],
+)
+
+py_library(
+    name = "pianoroll_lib",
+    srcs = ["pianoroll_lib.py"],
+    deps = [
+        ":constants",
+        ":events_lib",
+        ":sequences_lib",
+        "//magenta/pipelines:statistics",
+        "//magenta/protobuf:music_py_pb2",
+        # tensorflow dep
+    ],
+)
+
+py_test(
+    name = "pianoroll_lib_test",
+    srcs = ["pianoroll_lib_test.py"],
+    deps = [
+        ":pianoroll_lib",
+        ":sequences_lib",
+        ":testing_lib",
+        "//magenta/common:testing_lib",
+        "//magenta/protobuf:music_py_pb2",
+        # tensorflow dep
     ],
 )
 
@@ -427,10 +502,12 @@ py_library(
     name = "sequences_lib",
     srcs = ["sequences_lib.py"],
     deps = [
+        ":chord_symbols_lib",
         ":constants",
         "//magenta/pipelines:pipeline",
         "//magenta/pipelines:statistics",
         "//magenta/protobuf:music_py_pb2",
+        # tensorflow dep
     ],
 )
 

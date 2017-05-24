@@ -30,11 +30,29 @@ sh_binary(
         "//magenta/interfaces/midi:magenta_midi",
         "//magenta/scripts:convert_dir_to_note_sequences",
 
+        # Drums RNN Model and Scripts
+        "//magenta/models/drums_rnn",
+        "//magenta/models/drums_rnn:drums_rnn_create_dataset",
+        "//magenta/models/drums_rnn:drums_rnn_generate",
+        "//magenta/models/drums_rnn:drums_rnn_train",
+
+        # Improv RNN Model and Scripts
+        "//magenta/models/improv_rnn",
+        "//magenta/models/improv_rnn:improv_rnn_create_dataset",
+        "//magenta/models/improv_rnn:improv_rnn_generate",
+        "//magenta/models/improv_rnn:improv_rnn_train",
+
         # Melody RNN Model and Scripts
         "//magenta/models/melody_rnn",
         "//magenta/models/melody_rnn:melody_rnn_create_dataset",
         "//magenta/models/melody_rnn:melody_rnn_generate",
         "//magenta/models/melody_rnn:melody_rnn_train",
+
+        # Pianoroll RNN-NADE Model and Scripts
+        "//magenta/models/pianoroll_rnn_nade",
+        "//magenta/models/pianoroll_rnn_nade:pianoroll_rnn_nade_create_dataset",
+        "//magenta/models/pianoroll_rnn_nade:pianoroll_rnn_nade_generate",
+        "//magenta/models/pianoroll_rnn_nade:pianoroll_rnn_nade_train",
 
         # Polyphony RNN Model and Scripts
         "//magenta/models/polyphony_rnn",
@@ -52,5 +70,9 @@ sh_binary(
         "//magenta/models/image_stylization:image_stylization_finetune",
         "//magenta/models/image_stylization:image_stylization_train",
         "//magenta/models/image_stylization:image_stylization_transform",
+
+        # SketchRNN Model and Scripts
+        "//magenta/models/sketch_rnn",
+        "//magenta/models/sketch_rnn:sketch_rnn_train",
     ],
 )

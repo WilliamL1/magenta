@@ -24,7 +24,7 @@ from __future__ import division
 
 from fractions import Fraction
 import xml.etree.ElementTree as ET
-from zipfile import ZipFile
+import zipfile
 
 # internal imports
 
@@ -60,6 +60,17 @@ class MultipleTimeSignatureException(MusicXMLParseException):
 
 class AlternatingTimeSignatureException(MusicXMLParseException):
   """Exception thrown when an alternating time signature is encountered."""
+  pass
+
+
+class UnpitchedNoteException(MusicXMLParseException):
+  """Exception thrown when an unpitched note is encountered.
+
+  We do not currently support parsing files with unpitched notes (e.g.,
+  percussion scores).
+
+  http://www.musicxml.com/tutorial/percussion/unpitched-notes/
+  """
   pass
 
 
@@ -143,11 +154,17 @@ class MusicXMLDocument(object):
 
     Returns:
       The score as an xml.etree.ElementTree.
+
+    Raises:
+      MusicXMLParseException: if the file cannot be parsed.
     """
     score = None
     if filename.endswith('.mxl'):
       # Compressed MXL file. Uncompress in memory.
-      filename = ZipFile(filename)
+      try:
+        mxlzip = zipfile.ZipFile(filename)
+      except zipfile.BadZipfile as exception:
+        raise MusicXMLParseException(exception)
 
       # A compressed MXL file may contain multiple files, but only one
       # MusicXML file. Read the META-INF/container.xml file inside of the
@@ -155,32 +172,45 @@ class MusicXMLDocument(object):
       # http://www.musicxml.com/tutorial/compressed-mxl-files/zip-archive-structure/
 
       # Raise a MusicXMLParseException if multiple MusicXML files found
-      namelist = filename.namelist()
+      namelist = mxlzip.namelist()
       container_file = [x for x in namelist if x == 'META-INF/container.xml']
       compressed_file_name = ''
 
-      try:
-        container = ET.fromstring(filename.read(container_file[0]))
-        for rootfile_tag in container.findall('./rootfiles/rootfile'):
-          if 'media-type' in rootfile_tag.attrib:
-            if rootfile_tag.attrib['media-type'] == MUSICXML_MIME_TYPE:
+      if container_file:
+        try:
+          container = ET.fromstring(mxlzip.read(container_file[0]))
+          for rootfile_tag in container.findall('./rootfiles/rootfile'):
+            if 'media-type' in rootfile_tag.attrib:
+              if rootfile_tag.attrib['media-type'] == MUSICXML_MIME_TYPE:
+                if not compressed_file_name:
+                  compressed_file_name = rootfile_tag.attrib['full-path']
+                else:
+                  raise MusicXMLParseException(
+                      'Multiple MusicXML files found in compressed archive')
+            else:
+              # No media-type attribute, so assume this is the MusicXML file
               if not compressed_file_name:
                 compressed_file_name = rootfile_tag.attrib['full-path']
               else:
                 raise MusicXMLParseException(
                     'Multiple MusicXML files found in compressed archive')
-          else:
-            # No media-type attribute, so assume this is the MusicXML file
-            if not compressed_file_name:
-              compressed_file_name = rootfile_tag.attrib['full-path']
-            else:
-              raise MusicXMLParseException(
-                  'Multiple MusicXML files found in compressed archive')
-      except ET.ParseError as exception:
-        raise MusicXMLParseException(exception)
+        except ET.ParseError as exception:
+          raise MusicXMLParseException(exception)
 
+      if not compressed_file_name:
+        raise MusicXMLParseException(
+            'Unable to locate main .xml file in compressed archive.')
+
+      # zip file names are UTF-8 encoded.
+      compressed_file_name = compressed_file_name.encode('utf-8')
+
+      if compressed_file_name not in namelist:
+        raise MusicXMLParseException(
+            'Score file %s not found in zip archive' % compressed_file_name)
+
+      score_string = mxlzip.read(compressed_file_name)
       try:
-        score = ET.fromstring(filename.read(compressed_file_name))
+        score = ET.fromstring(score_string)
       except ET.ParseError as exception:
         raise MusicXMLParseException(exception)
     else:
@@ -604,6 +634,8 @@ class Note(object):
       elif child.tag == 'time-modification':
         # A time-modification element represents a tuplet_ratio
         self._parse_tuplet(child)
+      elif child.tag == 'unpitched':
+        raise UnpitchedNoteException('Unpitched notes are not supported')
       else:
         # Ignore other tag types because they are not relevant to Magenta.
         pass

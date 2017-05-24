@@ -26,7 +26,7 @@ If you want to get started right away, you can use a Drum Kit model that we've p
 
 ```
 BUNDLE_PATH=<absolute path of .mag file>
-CONFIG=<one of 'one_drum' or 'drum_kit'>
+CONFIG=<one of 'one_drum' or 'drum_kit', matching the bundle>
 
 drums_rnn_generate \
 --config=${CONFIG} \
@@ -51,7 +51,7 @@ SequenceExamples are fed into the model during training and evaluation. Each Seq
 
 ```
 drums_rnn_create_dataset \
---config=<one of 'one_drum' or 'drum_kit'>
+--config=<one of 'one_drum' or 'drum_kit'> \
 --input=/tmp/notesequences.tfrecord \
 --output_dir=/tmp/drums_rnn/sequence_examples \
 --eval_ratio=0.10
@@ -107,6 +107,7 @@ At least one note needs to be fed to the model before it can start generating co
 drums_rnn_generate \
 --config=drum_kit \
 --run_dir=/tmp/drums_rnn/logdir/run1 \
+--hparams="{'batch_size':64,'rnn_layer_sizes':[64,64]}" \
 --output_dir=/tmp/drums_rnn/generated \
 --num_outputs=10 \
 --num_steps=128 \

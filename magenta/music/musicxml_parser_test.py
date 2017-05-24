@@ -17,6 +17,7 @@ from collections import defaultdict
 import operator
 import os.path
 import tempfile
+import zipfile
 
 # internal imports
 
@@ -291,6 +292,15 @@ class MusicXMLParserTest(tf.test.TestCase):
         untransposed_musicxml)
     self.checkmusicxmlandsequence(transposed_musicxml, untransposed_proto)
     self.checkFMajorScale(self.clarinet_scale_filename, 'Clarinet in Bb')
+
+  def testcompressedmxlunicodefilename(self):
+    """Test an MXL file containing a unicode filename within its zip archive."""
+
+    unicode_filename = os.path.join(
+        tf.resource_loader.get_data_files_path(),
+        'testdata/unicode_filename.mxl')
+    sequence = musicxml_reader.musicxml_file_to_sequence_proto(unicode_filename)
+    self.assertEqual(len(sequence.notes), 8)
 
   def testcompressedxmltosequence(self):
     """Test the translation from compressed MusicXML to Sequence proto.
@@ -948,6 +958,24 @@ class MusicXMLParserTest(tf.test.TestCase):
     with self.assertRaises(musicxml_parser.MultipleTimeSignatureException):
       musicxml_parser.MusicXMLDocument(self.mid_measure_meter_filename)
 
+  def test_unpitched_notes(self):
+    with self.assertRaises(musicxml_parser.UnpitchedNoteException):
+      musicxml_parser.MusicXMLDocument(os.path.join(
+          tf.resource_loader.get_data_files_path(),
+          'testdata/unpitched.xml'))
+    with self.assertRaises(musicxml_reader.MusicXMLConversionError):
+      musicxml_reader.musicxml_file_to_sequence_proto(os.path.join(
+          tf.resource_loader.get_data_files_path(),
+          'testdata/unpitched.xml'))
+
+  def test_empty_archive(self):
+    with tempfile.NamedTemporaryFile(suffix='.mxl') as temp_file:
+      z = zipfile.ZipFile(temp_file.name, 'w')
+      z.close()
+
+      with self.assertRaises(musicxml_reader.MusicXMLConversionError):
+        musicxml_reader.musicxml_file_to_sequence_proto(
+            temp_file.name)
 
 if __name__ == '__main__':
   tf.test.main()
